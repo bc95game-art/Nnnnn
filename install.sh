@@ -3,8 +3,6 @@
 # Shad Link Extractor — نصب
 # ==============================
 
-set -e
-
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 RED='\033[0;31m'
@@ -15,24 +13,30 @@ echo -e "${GREEN}  Shad Link Extractor — نصب${NC}"
 echo -e "${GREEN}=====================================${NC}"
 echo ""
 
-echo -e "${YELLOW}[۱/۵] به‌روزرسانی پکیج‌ها...${NC}"
+echo -e "${YELLOW}[۱/۶] به‌روزرسانی پکیج‌ها...${NC}"
 pkg update -y && pkg upgrade -y
 
-echo -e "${YELLOW}[۲/۵] نصب Python و ابزارهای پایه...${NC}"
-pkg install -y python python-pip openssl curl git
+echo -e "${YELLOW}[۲/۶] نصب ابزارهای پایه + Rust...${NC}"
+pkg install -y python python-pip openssl curl git rust
 
-echo -e "${YELLOW}[۳/۵] دسترسی به فضای ذخیره‌سازی...${NC}"
+echo -e "${YELLOW}[۳/۶] دسترسی به فضای ذخیره‌سازی...${NC}"
 termux-setup-storage || true
 sleep 2
 
-echo -e "${YELLOW}[۴/۵] نصب mitmproxy...${NC}"
-pip install mitmproxy==10.3.1 --break-system-packages 2>/dev/null || pip install mitmproxy==10.3.1
+echo -e "${YELLOW}[۴/۶] نصب mitmproxy...${NC}"
+pip install mitmproxy --break-system-packages 2>/dev/null || pip install mitmproxy
 
-echo -e "${YELLOW}[۵/۵] ساخت پوشه‌های لازم...${NC}"
+echo -e "${YELLOW}[۵/۶] تست نصب...${NC}"
+if ! command -v mitmdump &>/dev/null; then
+    echo -e "${RED}❌ خطا در نصب mitmproxy${NC}"
+    exit 1
+fi
+
+echo -e "${YELLOW}[۶/۶] ساخت پوشه‌های لازم...${NC}"
 mkdir -p ~/shad-extractor/logs
 
 echo ""
 echo -e "${GREEN}✅ نصب با موفقیت انجام شد!${NC}"
 echo ""
-echo -e "برای شروع بنویسید:"
-echo -e "  ${YELLOW}bash run.sh${NC}"
+echo -e "قدم بعدی:"
+echo -e "  ${YELLOW}bash install_cert.sh${NC}"
