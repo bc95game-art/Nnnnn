@@ -1,7 +1,6 @@
 #!/data/data/com.termux/files/usr/bin/bash
 # ==============================
 # Shad Link Extractor — اجرا
-# با مدیریت خطای کامل
 # ==============================
 
 GREEN='\033[0;32m'
@@ -23,61 +22,59 @@ SOCKS_PORT=1080
 MITM_PORT=8080
 PROXY_SET=0
 
-# ── پاکسازی PID قدیمی ──
-if [ -f "$SOCKS_PID_FILE" ]; then
-    OLD_PID=$(cat "$SOCKS_PID_FILE")
-    kill "$OLD_PID" 2>/dev/null || true
-    rm -f "$SOCKS_PID_FILE"
-fi
-
-# ── بررسی پورت آزاد ──
-check_port() {
-    local port=$1
-    if ss -tuln 2>/dev/null | grep -q ":$port " || \
-       netstat -tuln 2>/dev/null | grep -q ":$port "; then
-        return 1  # پورت اشغال است
-    fi
-    return 0
-}
+# ── پاکسازی قبلی ──
+[ -f "$SOCKS_PID_FILE" ] && kill "$(cat "$SOCKS_PID_FILE")" 2>/dev/null && rm -f "$SOCKS_PID_FILE"
+pkill -f "mitmdump" 2>/dev/null || true
 
 set_proxy() {
     local addr="127.0.0.1:${MITM_PORT}"
-    settings put global http_proxy "$addr" 2>/dev/null && PROXY_SET=1 && \
-        ok "پروکسی خودکار فعال (بدون روت)" && return 0
-    command -v su &>/dev/null && su -c "settings put global http_proxy '$addr'" 2>/dev/null && \
-        PROXY_SET=1 && ok "پروکسی خودکار فعال (روت)" && return 0
-    command -v adb &>/dev/null && adb shell settings put global http_proxy "$addr" 2>/dev/null && \
-        PROXY_SET=1 && ok "پروکسی خودکار فعال (ADB)" && return 0
+
+    # روش ۱: مستقیم
+    if settings put global http_proxy "$addr" 2>/dev/null; then
+        PROXY_SET=1; ok "پروکسی خودکار (مستقیم)"; return 0
+    fi
+
+    # روش ۲: روت
+    if command -v su &>/dev/null; then
+        if su -c "settings put global http_proxy '$addr'" 2>/dev/null; then
+            PROXY_SET=1; ok "پروکسی خودکار (روت)"; return 0
+        fi
+    fi
+
+    # روش ۳: ADB — اگر وصل است
+    if command -v adb &>/dev/null && adb devices 2>/dev/null | grep -q "device$"; then
+        if adb shell settings put global http_proxy "$addr" 2>/dev/null; then
+            PROXY_SET=2; ok "پروکسی خودکار (ADB)"; return 0
+        fi
+    fi
+
     return 1
 }
 
 clear_proxy() {
     [ "$PROXY_SET" = "0" ] && return
-    settings delete global http_proxy 2>/dev/null || \
-    { command -v su &>/dev/null && su -c "settings delete global http_proxy" 2>/dev/null; } || \
-    { command -v adb &>/dev/null && adb shell settings delete global http_proxy 2>/dev/null; } || true
+    if [ "$PROXY_SET" = "2" ]; then
+        adb shell settings delete global http_proxy 2>/dev/null || true
+    else
+        settings delete global http_proxy 2>/dev/null || \
+        su -c "settings delete global http_proxy" 2>/dev/null || true
+    fi
     ok "پروکسی سیستم پاک شد"
 }
 
 cleanup() {
     echo ""
     echo -e "${YELLOW}در حال توقف...${NC}"
-    if [ -f "$SOCKS_PID_FILE" ]; then
-        kill "$(cat "$SOCKS_PID_FILE")" 2>/dev/null || true
-        rm -f "$SOCKS_PID_FILE"
-    fi
-    # کشتن mitmdump
+    [ -f "$SOCKS_PID_FILE" ] && kill "$(cat "$SOCKS_PID_FILE")" 2>/dev/null; rm -f "$SOCKS_PID_FILE"
     pkill -f "mitmdump" 2>/dev/null || true
     clear_proxy
     echo ""
-    echo -e "${GREEN}لینک‌های ضبط‌شده در:${NC}"
-    echo -e "  ${YELLOW}$LOG_DIR/links_only.txt${NC}"
-    echo -e "  ${YELLOW}$LOG_DIR/tokens.txt${NC}"
-    echo ""
-    echo -e "برای خروجی: ${YELLOW}bash export_links.sh${NC}"
+    echo -e "لینک‌ها: ${YELLOW}$LOG_DIR/links_only.txt${NC}"
+    echo -e "توکن‌ها: ${YELLOW}$LOG_DIR/tokens.txt${NC}"
+    echo -e "خروجی:   ${YELLOW}bash export_links.sh${NC}"
     exit 0
 }
-trap cleanup SIGINT SIGTERM EXIT
+trap cleanup SIGINT SIGTERM
 
 # ─────────────────────────────────────────
 clear
@@ -88,59 +85,41 @@ echo ""
 
 # ── بررسی پیش‌نیازها ──
 echo -e "${CYAN}[بررسی] پیش‌نیازها...${NC}"
-
 ! command -v mitmdump &>/dev/null && err "mitmproxy نصب نیست — اول: bash install.sh"
-ok "mitmproxy موجود است"
+! python3 -c "from mitmproxy.tools.main import mitmdump" 2>/dev/null && \
+    err "mitmproxy خراب است — دوباره: bash install.sh"
+ok "mitmproxy سالم است"
+[ ! -f "$SCRIPT_DIR/shad_capture.py" ]  && err "shad_capture.py یافت نشد"
+[ ! -f "$SCRIPT_DIR/builtin_proxy.py" ] && err "builtin_proxy.py یافت نشد"
+ok "فایل‌های پروژه موجودند"
 
-! command -v python3 &>/dev/null && err "Python نصب نیست — اول: bash install.sh"
-ok "Python موجود است"
-
-[ ! -f "$SCRIPT_DIR/shad_capture.py" ] && err "فایل shad_capture.py یافت نشد"
-ok "shad_capture.py موجود است"
-
-[ ! -f "$SCRIPT_DIR/builtin_proxy.py" ] && err "فایل builtin_proxy.py یافت نشد"
-ok "builtin_proxy.py موجود است"
-
-# ── [۱] پروکسی SOCKS5 ──
+# ── [۱] SOCKS5 ──
 echo ""
 echo -e "${CYAN}[۱/۳] راه‌اندازی پروکسی داخلی...${NC}"
-
-if ! check_port "$SOCKS_PORT"; then
-    warn "پورت $SOCKS_PORT اشغال است — تلاش با پورت 1081"
-    SOCKS_PORT=1081
-fi
-
 python3 "$SCRIPT_DIR/builtin_proxy.py" "$SOCKS_PORT" > "$LOG_DIR/socks5.log" 2>&1 &
-SOCKS_PID=$!
-echo "$SOCKS_PID" > "$SOCKS_PID_FILE"
+echo $! > "$SOCKS_PID_FILE"
 sleep 1
-
-if ! kill -0 "$SOCKS_PID" 2>/dev/null; then
-    echo -e "${RED}   خطا در راه‌اندازی SOCKS5:${NC}"
-    cat "$LOG_DIR/socks5.log"
-    err "SOCKS5 راه‌اندازی نشد"
+if ! kill -0 "$(cat "$SOCKS_PID_FILE")" 2>/dev/null; then
+    cat "$LOG_DIR/socks5.log"; err "SOCKS5 راه‌اندازی نشد"
 fi
 ok "SOCKS5 فعال — 127.0.0.1:${SOCKS_PORT}"
 
 # ── [۲] پروکسی سیستم ──
 echo ""
-echo -e "${CYAN}[۲/۳] تنظیم پروکسی سیستم اندروید...${NC}"
+echo -e "${CYAN}[۲/۳] تنظیم پروکسی سیستم...${NC}"
 if set_proxy; then
-    echo -e "${GREEN}   📱 نیازی به تنظیم دستی نیست!${NC}"
+    echo -e "${GREEN}   📱 پروکسی خودکار — نیازی به تنظیم WiFi نیست!${NC}"
 else
     warn "تنظیم خودکار ممکن نشد"
     LOCAL_IP=$(ip route get 1.1.1.1 2>/dev/null | awk '{print $7}' | head -1)
     [ -z "$LOCAL_IP" ] && LOCAL_IP="127.0.0.1"
     echo ""
-    echo -e "   برای تنظیم دستی:"
     echo -e "   ${YELLOW}WiFi ← پروکسی دستی ← آدرس: $LOCAL_IP ← پورت: $MITM_PORT${NC}"
-    echo ""
-    echo -e "   یا یک‌بار: ${YELLOW}bash setup_permission.sh${NC}"
     echo ""
     read -rp "   Enter برای ادامه..." _
 fi
 
-# ── [۳] ضبط ترافیک ──
+# ── [۳] ضبط ─
 echo ""
 echo -e "${CYAN}[۳/۳] شروع ضبط ترافیک...${NC}"
 echo ""
@@ -148,14 +127,11 @@ echo -e "${GREEN}▶ شاد را باز کنید — Ctrl+C برای توقف${N
 echo -e "${CYAN}────────────────────────────────────────────${NC}"
 echo ""
 
-if ! mitmdump \
+mitmdump \
     --listen-host 0.0.0.0 \
     --listen-port "$MITM_PORT" \
     --mode "upstream:socks5h://127.0.0.1:${SOCKS_PORT}" \
     --script "$SCRIPT_DIR/shad_capture.py" \
     --ssl-insecure \
     --set flow_detail=1 \
-    2>&1; then
-    echo ""
-    warn "mitmdump با خطا متوقف شد — لاگ کامل در: $LOG_DIR/socks5.log"
-fi
+    2>&1
